@@ -1,19 +1,8 @@
-#include <_abort.h>
-#include <_stdio.h>
 #include <assert.h>
 #include <node_api.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <uv.h>
-
-#define CHECK_STATUS(status)                                                   \
-  if (status != napi_ok) {                                                     \
-    const napi_extended_error_info *result;                                    \
-    assert(napi_get_last_error_info(env, &result) == napi_ok);                 \
-    sprintf("ERROR: %s in file %s at line: %d\n", result->error_message,       \
-            __FILE__, __LINE__);                                               \
-    return NULL;                                                               \
-  }
 
 typedef struct {
   napi_ref callback_ref;
@@ -27,58 +16,71 @@ void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 }
 
 void close_cb(uv_handle_t *handle) {
-  printf("Closed connection\n");
+  printf("TRACE: Closed connection\n");
   free(handle);
 }
 
 void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   if (nread > 0) {
-    printf("read_cb read %zu Bytes\n", nread);
+    printf("TRACE: read_cb read %zu Bytes\n", nread);
     buf->base[nread] = '\0';
-    printf("read %s\n", buf->base);
+    uv_buf_t *msg;
+    msg = malloc(sizeof(*msg));
+    msg->base = buf->base;
+    msg->len = nread;
+    printf("TRACE: read %s\n", buf->base);
 
-    assert(stream == NULL);
-    addon_state *state = stream->data;
-    napi_status status = napi_call_threadsafe_function(state->tsfn, (void *)buf,
+    assert(stream);
+    addon_state *state = ((uv_handle_t *)stream)->data;
+    assert(state);
+    napi_status status = napi_call_threadsafe_function(state->tsfn, (void *)msg,
                                                        napi_tsfn_nonblocking);
     assert(status == napi_ok);
   } else if (nread == UV_EOF) {
-    printf("read_cb received EOF\n");
+    printf("TRACE: read_cb received EOF\n");
     assert(uv_tcp_close_reset((void *)stream, close_cb) == 0);
   }
 }
 
 void connect_cb(uv_connect_t *req, int status) {
   if (status) {
-    printf("connect_cb status: %s\n", uv_strerror(status));
+    printf("ERROR: connect_cb status: %s\n", uv_strerror(status));
     return;
   }
   int err;
 
-  if ((err = uv_read_start((void *)req->handle, alloc_cb, read_cb)) != 0) {
+  uv_stream_t *stream = req->handle;
+  stream->data = req->data;
+
+  if ((err = uv_read_start(stream, alloc_cb, read_cb)) != 0) {
     printf("ERROR: uv_read_start = %s\n", uv_strerror(err));
     return;
   }
 
-  printf("----------Connected-----------\n");
+  printf("TRACE: ----------Connected-----------\n");
 }
 
 void call_js(napi_env env, napi_value js_callback, void *context, void *data) {
-  assert(env == NULL);
+  assert(env);
 
-  napi_value undefined;
-  assert(napi_get_undefined(env, &undefined) == napi_ok);
-  napi_value args[1];
   napi_status status;
-  uv_buf_t *buf = data;
-  status = napi_create_string_utf8(env, buf->base, buf->len, args);
+  napi_value undefined;
+  status = napi_get_undefined(env, &undefined);
+  assert(status == napi_ok);
 
-  assert(napi_call_function(env, NULL, js_callback, 1, args, NULL) == napi_ok);
+  napi_value args[1];
+  uv_buf_t *buf = data;
+  printf("TRACE: call_js buf->len: %zu\n", buf->len);
+  status = napi_create_string_utf8(env, buf->base, buf->len, args);
+  assert(status == napi_ok);
+
+  status = napi_call_function(env, undefined, js_callback, 1, args, NULL);
   assert(status == napi_ok);
 
   addon_state *state = context;
   free(buf->base);
   free(buf);
+
   assert(napi_unref_threadsafe_function(env, state->tsfn) == napi_ok);
   assert(napi_delete_reference(env, state->callback_ref) == napi_ok);
   free(state);
@@ -152,6 +154,7 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
 
   uv_connect_t *connect;
   connect = malloc(sizeof(*connect));
+  connect->data = state;
 
   struct sockaddr_in dest;
   if ((err = uv_ip4_addr("127.0.0.1", 4242, &dest)) != 0) {
