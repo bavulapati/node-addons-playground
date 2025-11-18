@@ -1,0 +1,13 @@
+{
+  "name": "tcp",
+  "gypfile": true,
+  "scripts": {
+    "test": "node client.js"
+  },
+  "binary": {
+    "napi_versions": [3]
+  },
+  "dependencies": {
+    "bindings": "^1.5.0"
+  }
+}

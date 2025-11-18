@@ -1,0 +1,13 @@
+{
+  "name": "tcp",
+  "scripts": {
+    "test": "node client.js",
+    "install": "cmake-js compile"
+  },
+  "binary": {
+    "napi_versions": [3]
+  },
+  "dependencies": {
+    "bindings": "^1.5.0"
+  }
+}

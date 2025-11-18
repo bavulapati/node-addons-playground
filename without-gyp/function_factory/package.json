@@ -1,0 +1,11 @@
+{
+  "name": "object_factory",
+  "main": "addon.js",
+  "gypfile": true,
+  "scripts": {
+    "test": "node addon.js"
+  },
+  "dependencies": {
+    "bindings": "^1.5.0"
+  }
+}

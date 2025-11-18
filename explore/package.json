@@ -1,0 +1,10 @@
+{
+  "name": "n-api-explore",
+  "version": "0.0.1",
+  "description": "Explore Node-API native addon with CMake.",
+  "main": "hello.js",
+  "scripts": {
+    "install": "cmake-js compile",
+    "test": "node hello.js"
+  }
+}

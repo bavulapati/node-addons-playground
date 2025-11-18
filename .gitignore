@@ -53,3 +53,12 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# build directory
+**/build/
+
+# lsp cache
+**/.cache/
+
+# node modules
+**/node_modules/
