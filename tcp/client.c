@@ -37,7 +37,7 @@ void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 }
 
 void close_cb(uv_handle_t *handle) {
-  printf("TRACE: Closed connection\n");
+  printf("TRACE: -------------Closed connection---------------\n");
   addon_state *state = handle->data;
   assert(napi_unref_threadsafe_function(state->env, state->tsfn) == napi_ok);
   assert(napi_delete_reference(state->env, state->callback_ref) == napi_ok);
