@@ -19,7 +19,9 @@
 typedef struct {
   napi_env env;
   uv_connect_t *req;
-  napi_ref callback_ref;
+  napi_ref on_data_ref;
+  napi_ref on_connect_ref;
+  napi_ref on_end_ref;
 } addon_state;
 
 void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
@@ -31,13 +33,15 @@ void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 void close_cb(uv_handle_t *handle) {
   debug_log("-------------Closed connection---------------\n");
   addon_state *state = handle->data;
-  assert(napi_delete_reference(state->env, state->callback_ref) == napi_ok);
+  assert(napi_delete_reference(state->env, state->on_data_ref) == napi_ok);
+  assert(napi_delete_reference(state->env, state->on_connect_ref) == napi_ok);
+  assert(napi_delete_reference(state->env, state->on_end_ref) == napi_ok);
   free(state->req);
   free(state);
   free(handle);
 }
 
-void call_js(napi_env env, napi_value js_callback, void *data) {
+void call_js(napi_env env, napi_ref cb_ref, void *data) {
   assert(env);
 
   napi_status status;
@@ -50,19 +54,28 @@ void call_js(napi_env env, napi_value js_callback, void *data) {
   status = napi_get_undefined(env, &undefined);
   assert(status == napi_ok);
 
-  napi_value args[1];
-  uv_buf_t *buf = data;
-  status = napi_create_string_utf8(env, buf->base, buf->len, args);
+  napi_value cb;
+  status = napi_get_reference_value(env, cb_ref, &cb);
   assert(status == napi_ok);
 
-  status = napi_call_function(env, undefined, js_callback, 1, args, NULL);
-  assert(status == napi_ok);
+  if (data) {
+    napi_value args[1];
+    uv_buf_t *buf = data;
+    status = napi_create_string_utf8(env, buf->base, buf->len, args);
+    assert(status == napi_ok);
+
+    status = napi_call_function(env, undefined, cb, 1, args, NULL);
+    assert(status == napi_ok);
+
+    free(buf->base);
+    free(buf);
+  } else {
+    status = napi_call_function(env, undefined, cb, 0, NULL, NULL);
+    assert(status == napi_ok);
+  }
 
   status = napi_close_handle_scope(env, scope);
   assert(status == napi_ok);
-
-  free(buf->base);
-  free(buf);
 }
 
 void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -79,23 +92,17 @@ void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     addon_state *state = ((uv_handle_t *)stream)->data;
     assert(state);
 
-    napi_status status;
-    napi_handle_scope scope;
-    status = napi_open_handle_scope(state->env, &scope);
-    assert(status == napi_ok);
-
-    napi_value cb;
-    status = napi_get_reference_value(state->env, state->callback_ref, &cb);
-    assert(status == napi_ok);
-
-    call_js(state->env, cb, msg);
-
-    status = napi_close_handle_scope(state->env, scope);
-    assert(status == napi_ok);
+    call_js(state->env, state->on_data_ref, msg);
 
   } else {
     if (nread == UV_EOF) {
       debug_log("received EOF\n");
+      assert(stream);
+      addon_state *state = ((uv_handle_t *)stream)->data;
+      assert(state);
+
+      call_js(state->env, state->on_end_ref, NULL);
+
     } else {
       char erstr[124];
       sprintf(erstr, "ERROR: read_cb %s in file %s at line: %d\n",
@@ -118,6 +125,11 @@ void connect_cb(uv_connect_t *req, int status) {
   }
 
   debug_log("----------Connected-----------\n");
+
+  addon_state *state = req->data;
+
+  call_js(state->env, state->on_connect_ref, NULL);
+
   int err;
 
   uv_stream_t *stream = req->handle;
@@ -133,8 +145,8 @@ void connect_cb(uv_connect_t *req, int status) {
 napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
   napi_status status;
 
-  if (argc < 3) {
-    status = napi_throw_type_error(env, NULL, "Expected 3 args");
+  if (argc < 5) {
+    status = napi_throw_type_error(env, NULL, "Expected 5 args");
     assert(status == napi_ok);
     return napi_invalid_arg;
   }
@@ -167,6 +179,24 @@ napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
     return napi_function_expected;
   }
 
+  status = napi_typeof(env, args[3], &valuetype);
+  assert(status == napi_ok);
+  if (valuetype != napi_function) {
+    status =
+        napi_throw_type_error(env, NULL, "Fourth argument must be function");
+    assert(status == napi_ok);
+    return napi_function_expected;
+  }
+
+  status = napi_typeof(env, args[4], &valuetype);
+  assert(status == napi_ok);
+  if (valuetype != napi_function) {
+    status =
+        napi_throw_type_error(env, NULL, "Fifth argument must be function");
+    assert(status == napi_ok);
+    return napi_function_expected;
+  }
+
   return napi_ok;
 }
 
@@ -175,7 +205,7 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
   const napi_extended_error_info *result;
   char erstr[124];
 
-  size_t argc = 3;
+  size_t argc = 5;
   napi_value args[argc];
   status = napi_get_cb_info(env, info, &argc, args, NULL, NULL);
   assert(status == napi_ok);
@@ -202,7 +232,11 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
   state = malloc(sizeof(*state));
   state->env = env;
 
-  status = napi_create_reference(env, args[2], 1, &state->callback_ref);
+  status = napi_create_reference(env, args[2], 1, &state->on_connect_ref);
+  assert(status == napi_ok);
+  status = napi_create_reference(env, args[3], 1, &state->on_data_ref);
+  assert(status == napi_ok);
+  status = napi_create_reference(env, args[4], 1, &state->on_end_ref);
   assert(status == napi_ok);
 
   uv_tcp_t *socket;
