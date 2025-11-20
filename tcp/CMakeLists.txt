@@ -9,6 +9,8 @@ file(GLOB SOURCE_FILES "client.c")
 
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${CMAKE_JS_SRC})
 set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
+# Define DEBUG macro only for debug builds
+target_compile_definitions(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:DEBUG>)
 
 set(CMAKE_JS_NODE_INC ~/.cmake-js/node-arm64/v24.11.0/include/node/)
 
