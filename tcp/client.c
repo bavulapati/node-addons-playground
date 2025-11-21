@@ -117,10 +117,13 @@ void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 }
 
 void connect_cb(uv_connect_t *req, int status) {
+  uv_stream_t *stream = req->handle;
+  stream->data = req->data;
+
   if (status) {
     printf("ERROR: %s in file %s at line: %d\n", uv_strerror(status), __FILE__,
            __LINE__);
-    uv_close((void *)req, close_cb);
+    assert(uv_tcp_close_reset((void *)stream, close_cb) == 0);
     return;
   }
 
@@ -131,9 +134,6 @@ void connect_cb(uv_connect_t *req, int status) {
   call_js(state->env, state->on_connect_ref, NULL);
 
   int err;
-
-  uv_stream_t *stream = req->handle;
-  stream->data = req->data;
 
   if ((err = uv_read_start(stream, alloc_cb, read_cb)) != 0) {
     printf("ERROR: %s in file %s at line: %d\n", uv_strerror(err), __FILE__,
