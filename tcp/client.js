@@ -1,4 +1,4 @@
-const tcp = require("bindings")("tcp");
+const tcpConnect = require(".");
 
 function onData(data) {
   console.log("Data: ", data);
@@ -12,4 +12,17 @@ function onDisconnect() {
   console.log("Disconnected.");
 }
 
-tcp.connect("127.0.0.1", 4242, onConnect, onData, onDisconnect);
+function onError(err) {
+  console.error("Error", err);
+}
+
+try {
+  const client = tcpConnect("127.0.0.1", 4242);
+  // const client = tcpConnect("127.0.0.1");
+  client.on("connect", onConnect);
+  client.on("data", onData);
+  client.on("disconect", onDisconnect);
+  client.on("error", onError);
+} catch (err) {
+  console.error("Error received at JS layer", err);
+}

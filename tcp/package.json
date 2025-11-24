@@ -1,5 +1,6 @@
 {
   "name": "tcp",
+  "main": "./index.js",
   "scripts": {
     "test": "node client.js",
     "install": "cmake-js compile"
