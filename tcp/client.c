@@ -38,6 +38,9 @@ addon_state *state_alloc() {
   addon_state *state;
 
   state = malloc(sizeof(*state));
+  if (state == NULL) {
+    return state;
+  }
   state->env = NULL;
   state->req = NULL;
   state->on_connect_ref = NULL;
@@ -265,6 +268,7 @@ void close_cb(uv_handle_t *handle) {
   debug_log("-------------Closed connection---------------\n");
   addon_state *state = handle->data;
   state_cleanup(state);
+  handle->data = NULL;
   free(handle);
 }
 
@@ -318,12 +322,12 @@ void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 
 void connect_cb(uv_connect_t *req, int status) {
   uv_stream_t *stream = req->handle;
-  addon_state *state = req->data;
-  stream->data = state;
+  addon_state *state = stream->data;
 
   if (status != 0) {
     LOG_ERROR("tcp connection erro");
     send_error_uv(state, status);
+    stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -332,6 +336,7 @@ void connect_cb(uv_connect_t *req, int status) {
 
   if (call_js_value(state, state->on_connect_ref, NULL) != napi_ok) {
     LOG_ERROR("Error calling connect callback");
+    stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -340,6 +345,7 @@ void connect_cb(uv_connect_t *req, int status) {
   if (status != 0) {
     LOG_ERROR("Error starting read");
     send_error_napi(state, status);
+    stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -471,6 +477,12 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
 
   addon_state *state;
   state = state_alloc();
+  if (state == NULL) {
+    LOG_ERROR("Error allocating memory for addon state");
+    free(host);
+    napi_throw_error(env, NULL, "Error allocating memory for addon state");
+    return NULL;
+  }
   state->env = env;
 
   status = napi_create_reference(env, args[2], 1, &state->on_connect_ref);
@@ -506,7 +518,8 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
-  uv_tcp_t *socket = malloc(sizeof(*socket));
+  uv_tcp_t *socket;
+  socket = malloc(sizeof(*socket));
   int err;
 
   err = uv_tcp_init(uv_default_loop(), socket);
@@ -518,10 +531,6 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     throw_error_uv(env, err);
     return NULL;
   }
-
-  uv_connect_t *connect = malloc(sizeof(*connect));
-  state->req = connect;
-  connect->data = state;
 
   struct sockaddr_in dest;
   err = uv_ip4_addr(host, port, &dest);
@@ -535,17 +544,20 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
+  free(host);
+  uv_connect_t *connect;
+  connect = malloc(sizeof(*connect));
   err = uv_tcp_connect(connect, socket, (void *)&dest, connect_cb);
   if (err != 0) {
     LOG_ERROR("Error connecting to tcp socket");
     free(socket);
     state_cleanup(state);
-    free(host);
     throw_error_uv(env, err);
     return NULL;
   }
+  state->req = connect;
+  socket->data = state;
 
-  free(host);
   // function returns undefined on success
   napi_value undefined;
   napi_get_undefined(env, &undefined);
