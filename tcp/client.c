@@ -8,6 +8,28 @@
 #include <stdlib.h>
 #include <uv.h>
 
+void *debug_mem_malloc(size_t size, const char *func, uint line) {
+  printf("allocating memory of size %zu at line:%u in func:%s\n", size, line,
+         func);
+  return malloc(size);
+}
+
+void debug_mem_free(void *memory, const char *func, uint line) {
+  printf("freeing memory %p at line:%u in func:%s\n", memory, line, func);
+  return free(memory);
+}
+
+#ifdef MEMORY_DEBUG
+
+#define malloc(n)                                                              \
+  debug_mem_malloc(n, __func__, __LINE__) /* Replaces malloc.                  \
+                                           */
+#define realloc(n, m)                                                          \
+  debug_mem_realloc(n, m, __FILE__, __LINE__)         /* Replaces realloc. */
+#define free(n) debug_mem_free(n, __func__, __LINE__) /* Replaces free. */
+
+#endif
+
 #ifdef DEBUG
 #define debug_log(fmt, ...)                                                    \
   fprintf(stderr, "DEBUG %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, \
@@ -21,12 +43,18 @@ void log_error(const char *func, const char *file, int line, const char *msg) {
   fprintf(stderr, "Error in function %s at %s:%d - %s\n", func, file, line,
           msg);
 }
+// Info logging function
+void log_info(const char *func, const char *file, int line, const char *msg) {
+  fprintf(stdout, "[%s at %s:%d - %s]\n", func, file, line, msg);
+}
 
 #ifdef DEBUG
 // Macro to automatically pass current function, file, and line to log_error
 #define LOG_ERROR(msg) log_error(__func__, __FILE__, __LINE__, msg)
+#define LOG_INFO(msg) log_info(__func__, __FILE__, __LINE__, msg)
 #else
 #define LOG_ERROR(msg) ((void)0)
+#define LOG_INFO(msg) ((void)0)
 #endif
 
 typedef struct {
@@ -461,7 +489,12 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
-  char *host = malloc(sizeof(host_len + 1));
+  char *host = NULL;
+  host = malloc(host_len + 1);
+  if (host == NULL) {
+    napi_throw_error(env, NULL, "Failed to allocate memory to host");
+    return NULL;
+  }
   status =
       napi_get_value_string_utf8(env, args[0], host, host_len + 1, &host_len);
   if (status != napi_ok) {
@@ -523,9 +556,15 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
-  uv_tcp_t *socket;
+  uv_tcp_t *socket = NULL;
   socket = malloc(sizeof(*socket));
-  int err;
+  if (socket == NULL) {
+    state_cleanup(state);
+    free(host);
+    napi_throw_error(env, NULL, "Failed to allocate memory to socket");
+    return NULL;
+  }
+  int err = 0;
 
   err = uv_tcp_init(uv_default_loop(), socket);
   if (err != 0) {
@@ -550,8 +589,14 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
   }
 
   free(host);
-  uv_connect_t *connect;
+  uv_connect_t *connect = NULL;
   connect = malloc(sizeof(*connect));
+  if (connect == NULL) {
+    free(socket);
+    state_cleanup(state);
+    napi_throw_error(env, NULL, "Failed to allocate memory to uv_connect");
+    return NULL;
+  }
   err = uv_tcp_connect(connect, socket, (void *)&dest, connect_cb);
   if (err != 0) {
     LOG_ERROR("Error connecting to tcp socket");

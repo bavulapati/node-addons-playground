@@ -3,7 +3,8 @@ project(tcp)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(NAPI_VERSION=4)
-set(CMAKE_BUILD_TYPE "Debug")
+# set(CMAKE_BUILD_TYPE "Debug")
+# add_compile_definitions(MEMORY_DEBUG)
 
 file(GLOB SOURCE_FILES "client.c")
 
