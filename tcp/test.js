@@ -21,22 +21,70 @@ test("validate function signature", (t) => {
   t.exception.all(() => {
     tcpConnect("127.0.0.1", "4242");
   }, "expects port as number");
-  t.execution(() => {
-    tcpConnect("127.0.0.1", 4242);
-  }, "Should not throw");
 });
 
 test("connection should be refused without server", async (t) => {
+  t.plan(2);
+
+  const lc = t.test("no server");
+  lc.plan(2);
+
   const client = tcpConnect("127.0.0.1", 4242);
-  t.is(typeof client, "object", "should return object");
-  await t.exception(
-    () =>
-      new Promise((resolve, reject) => {
-        client.once("error", (err) => {
-          reject(err);
-        });
-        setTimeout(resolve, 5000);
-      }),
-    "should emit error",
-  );
+  lc.is(typeof client, "object", "client should be object");
+  client.once("error", (err) => {
+    lc.pass("client emitted error");
+  });
+
+  await lc;
+  t.pass();
+});
+
+test("should receive data when server is accepting connections", async (t) => {
+  function waitForServer(server) {
+    return new Promise((resolve, reject) => {
+      function done(error) {
+        error ? reject(error) : resolve();
+      }
+
+      server.on("listening", done).on("error", done);
+    });
+  }
+
+  t.plan(2);
+
+  const lc = t.test("server available");
+  lc.plan(4);
+
+  const net = require("node:net");
+  const server = net.createServer((c) => {
+    c.on("close", () => {
+      t.pass("server connection closed");
+    });
+    c.end("hello\r\n");
+  });
+  server.on("error", (err) => {
+    lc.fail("server error");
+  });
+  server.listen(4242, () => {
+    lc.pass("server bound");
+  });
+
+  await waitForServer(server);
+
+  const client = tcpConnect("127.0.0.1", 4242);
+  client.once("connect", () => {
+    lc.pass("client connected successfully");
+  });
+  client.once("end", () => {
+    lc.pass("client connection ended successfully");
+  });
+  client.on("data", () => {
+    lc.pass("client received data successfully");
+  });
+  client.on("error", () => {
+    lc.fail("client received error");
+  });
+
+  await lc;
+  server.close();
 });
