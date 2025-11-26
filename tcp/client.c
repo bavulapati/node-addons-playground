@@ -22,8 +22,12 @@ void log_error(const char *func, const char *file, int line, const char *msg) {
           msg);
 }
 
+#ifdef DEBUG
 // Macro to automatically pass current function, file, and line to log_error
 #define LOG_ERROR(msg) log_error(__func__, __FILE__, __LINE__, msg)
+#else
+#define LOG_ERROR(msg) ((void)0)
+#endif
 
 typedef struct {
   napi_env env;
@@ -333,9 +337,10 @@ void connect_cb(uv_connect_t *req, int status) {
   }
 
   debug_log("----------Connected-----------\n");
-
-  if (call_js_value(state, state->on_connect_ref, NULL) != napi_ok) {
+  napi_status ns = call_js_value(state, state->on_connect_ref, NULL);
+  if (ns != napi_ok) {
     LOG_ERROR("Error calling connect callback");
+    send_error_napi(state, ns);
     stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
@@ -344,7 +349,7 @@ void connect_cb(uv_connect_t *req, int status) {
   status = uv_read_start(stream, alloc_cb, read_cb);
   if (status != 0) {
     LOG_ERROR("Error starting read");
-    send_error_napi(state, status);
+    send_error_uv(state, status);
     stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
