@@ -18,7 +18,6 @@ function onError(err) {
 
 try {
   const client = tcpConnect("127.0.0.1", 4242);
-  // const client = tcpConnect("127.0.0.1");
   client.on("connect", onConnect);
   client.on("data", onData);
   client.on("end", onEnd);
