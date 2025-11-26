@@ -360,7 +360,7 @@ napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
   napi_status status;
 
   if (argc < 6) {
-    status = napi_throw_type_error(env, NULL, "Expected 6 args");
+    status = napi_throw_error(env, NULL, "Expected 6 args");
     return napi_invalid_arg;
   }
 

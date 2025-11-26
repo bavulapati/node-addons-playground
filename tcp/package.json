@@ -13,5 +13,8 @@
   "dependencies": {
     "bindings": "^1.5.0",
     "cmake-js": "^7.4.0"
+  },
+  "devDependencies": {
+    "brittle": "^3.19.1"
   }
 }
