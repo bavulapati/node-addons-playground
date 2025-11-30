@@ -2,7 +2,7 @@
   "name": "tcp",
   "main": "./index.js",
   "scripts": {
-    "test": "node client.js",
+    "test": "node test.js",
     "install": "cmake-js compile"
   },
   "binary": {

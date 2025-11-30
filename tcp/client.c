@@ -1,5 +1,3 @@
-#include "js_native_api.h"
-#include "js_native_api_types.h"
 #include <assert.h>
 #include <node_api.h>
 #include <stddef.h>
@@ -64,21 +62,43 @@ typedef struct {
   napi_ref on_connect_ref;
   napi_ref on_end_ref;
   napi_ref on_error_ref;
+  char *host;
+  uint32_t port;
+  uv_buf_t *write_data;
 } addon_state;
 
-addon_state *state_alloc() {
+addon_state *state_alloc(size_t host_size) {
   addon_state *state;
 
   state = malloc(sizeof(*state));
   if (state == NULL) {
-    return state;
+    return NULL;
   }
+
+  state->host = malloc(host_size);
+  if (state->host == NULL) {
+    return NULL;
+  }
+
+  state->req = malloc(sizeof(*state->req));
+  if (state->req == NULL) {
+    return NULL;
+  }
+
+  state->write_data = malloc(sizeof(*state->write_data));
+  if (state->write_data == NULL) {
+    return NULL;
+  }
+  state->write_data->base = "GET / HTTP/1.1\r\nHost: "
+                            "example.com\r\nConnection: close\r\n\r\n";
+  state->write_data->len = 56;
+
   state->env = NULL;
-  state->req = NULL;
   state->on_connect_ref = NULL;
   state->on_data_ref = NULL;
   state->on_end_ref = NULL;
   state->on_error_ref = NULL;
+  state->port = 0;
 
   return state;
 }
@@ -86,6 +106,16 @@ addon_state *state_alloc() {
 void state_cleanup(addon_state *state) {
   if (state == NULL) {
     return;
+  }
+
+  if (state->host != NULL) {
+    free(state->host);
+    state->host = NULL;
+  }
+
+  if (state->write_data != NULL) {
+    free(state->write_data);
+    state->write_data = NULL;
   }
 
   if (state->on_connect_ref != NULL) {
@@ -218,34 +248,33 @@ void send_error(addon_state *state, char *errstr) {
   status = napi_open_handle_scope(state->env, &scope);
   if (status != napi_ok) {
     LOG_ERROR("Error opening napi handle scope");
-    return state_cleanup(state);
+    return;
   }
 
   status = napi_create_string_utf8(state->env, errstr, NAPI_AUTO_LENGTH, &msg);
   if (status != napi_ok) {
     LOG_ERROR("Error creating napi string");
     napi_close_handle_scope(state->env, scope);
-    return state_cleanup(state);
+    return;
   }
 
   status = napi_create_error(state->env, NULL, msg, &err_obj);
   if (status != napi_ok) {
     LOG_ERROR("Error creating napi error");
     napi_close_handle_scope(state->env, scope);
-    return state_cleanup(state);
+    return;
   }
 
   status = call_js_value(state, state->on_error_ref, err_obj);
   if (status != napi_ok) {
     LOG_ERROR("Error calling error callback");
     napi_close_handle_scope(state->env, scope);
-    return state_cleanup(state);
+    return;
   }
   status = napi_close_handle_scope(state->env, scope);
   if (status != napi_ok) {
     LOG_ERROR("Error closing napi handle scope");
   }
-  return state_cleanup(state);
 }
 
 void send_error_napi(addon_state *state, napi_status status) {
@@ -325,6 +354,8 @@ void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     if (status != napi_ok) {
       LOG_ERROR("Error calling data callback");
       send_error_napi(state, status);
+      uv_read_stop(stream);
+      uv_close((uv_handle_t *)stream, close_cb);
     }
   } else {
     if (nread == UV_EOF) {
@@ -338,18 +369,35 @@ void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
       LOG_ERROR("Error while reading socket");
       send_error_uv(state, nread);
     }
-    if (buf && buf->base) {
-      free(buf->base);
-    }
     uv_read_stop(stream);
     uv_close((uv_handle_t *)stream, close_cb);
-    return;
   }
 
   if (buf && buf->base) {
     free(buf->base);
   }
   return;
+}
+
+void write_cb(uv_write_t *req, int status) {
+  uv_stream_t *stream = req->handle;
+  addon_state *state = stream->data;
+
+  if (req->data != NULL) {
+    free(req->data);
+    req->data = NULL;
+  }
+
+  if (status != 0) {
+    LOG_ERROR("write erro");
+    send_error_uv(state, status);
+    free(req);
+    uv_close((void *)stream, close_cb);
+    return;
+  }
+
+  free(req);
+  debug_log("write success!");
 }
 
 void connect_cb(uv_connect_t *req, int status) {
@@ -359,7 +407,6 @@ void connect_cb(uv_connect_t *req, int status) {
   if (status != 0) {
     LOG_ERROR("tcp connection erro");
     send_error_uv(state, status);
-    stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -369,7 +416,6 @@ void connect_cb(uv_connect_t *req, int status) {
   if (ns != napi_ok) {
     LOG_ERROR("Error calling connect callback");
     send_error_napi(state, ns);
-    stream->data = NULL;
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -378,7 +424,20 @@ void connect_cb(uv_connect_t *req, int status) {
   if (status != 0) {
     LOG_ERROR("Error starting read");
     send_error_uv(state, status);
-    stream->data = NULL;
+    uv_close((void *)stream, close_cb);
+    return;
+  }
+
+  uv_write_t *write_req = malloc(sizeof(*write_req));
+
+  uv_buf_t buf = uv_buf_init(malloc(state->write_data->len + 1),
+                             state->write_data->len + 1);
+  memcpy(buf.base, state->write_data->base, state->write_data->len);
+  write_req->data = buf.base;
+  status = uv_write(write_req, stream, &buf, 1, write_cb);
+  if (status != 0) {
+    LOG_ERROR("Error writing ");
+    send_error_uv(state, status);
     uv_close((void *)stream, close_cb);
     return;
   }
@@ -463,15 +522,25 @@ napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
 }
 
 napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
-  napi_status status;
+
+  napi_status status = napi_ok;
+  addon_state *state = NULL;
+  // function returns undefined on success
+  napi_value undefined;
+  status = napi_get_undefined(env, &undefined);
+
+  if (status != napi_ok) {
+    LOG_ERROR("Error getting undefined value");
+    napi_throw_error(env, NULL, "Error getting undefined value");
+    return NULL;
+  }
 
   size_t argc = 6;
   napi_value args[argc];
   status = napi_get_cb_info(env, info, &argc, args, NULL, NULL);
   if (status != napi_ok) {
     LOG_ERROR("Error retrieving connect function arguments");
-    throw_error_napi(env, status);
-    return NULL;
+    goto napi_cleanup;
   }
 
   // validate_cb_input throws error, so we don't rethrow the error here
@@ -485,132 +554,93 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
   status = napi_get_value_string_utf8(env, args[0], NULL, 0, &host_len);
   if (status != napi_ok) {
     LOG_ERROR("Error reading host length");
-    throw_error_napi(env, status);
-    return NULL;
+    goto napi_cleanup;
   }
 
-  char *host = NULL;
-  host = malloc(host_len + 1);
-  if (host == NULL) {
-    napi_throw_error(env, NULL, "Failed to allocate memory to host");
-    return NULL;
-  }
-  status =
-      napi_get_value_string_utf8(env, args[0], host, host_len + 1, &host_len);
-  if (status != napi_ok) {
-    LOG_ERROR("Error reading host value");
-    free(host);
-    throw_error_napi(env, status);
-    return NULL;
-  }
-
-  uint32_t port;
-  status = napi_get_value_uint32(env, args[1], &port);
-  if (status != napi_ok) {
-    LOG_ERROR("Error reading port value");
-    free(host);
-    throw_error_napi(env, status);
-    return NULL;
-  }
-
-  addon_state *state;
-  state = state_alloc();
+  state = state_alloc(host_len + 1);
   if (state == NULL) {
     LOG_ERROR("Error allocating memory for addon state");
-    free(host);
+    state_cleanup(state);
     napi_throw_error(env, NULL, "Error allocating memory for addon state");
-    return NULL;
+    return undefined;
   }
   state->env = env;
+
+  status = napi_get_value_string_utf8(env, args[0], state->host, host_len + 1,
+                                      &host_len);
+  if (status != napi_ok) {
+    LOG_ERROR("Error reading host value");
+    goto napi_cleanup;
+  }
+
+  status = napi_get_value_uint32(env, args[1], &state->port);
+  if (status != napi_ok) {
+    LOG_ERROR("Error reading port value");
+    goto napi_cleanup;
+  }
 
   status = napi_create_reference(env, args[2], 1, &state->on_connect_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_connect reference");
-    state_cleanup(state);
-    free(host);
-    napi_throw_error(env, NULL, "Failed to create reference");
-    return NULL;
+    goto napi_cleanup;
   }
   status = napi_create_reference(env, args[3], 1, &state->on_data_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_data reference");
-    state_cleanup(state);
-    free(host);
-    napi_throw_error(env, NULL, "Failed to create reference");
-    return NULL;
+    goto napi_cleanup;
   }
   status = napi_create_reference(env, args[4], 1, &state->on_end_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_data reference");
-    state_cleanup(state);
-    free(host);
-    napi_throw_error(env, NULL, "Failed to create reference");
-    return NULL;
+    goto napi_cleanup;
   }
   status = napi_create_reference(env, args[5], 1, &state->on_error_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_error reference");
-    state_cleanup(state);
-    free(host);
-    napi_throw_error(env, NULL, "Failed to create reference");
-    return NULL;
+    goto napi_cleanup;
   }
 
-  uv_tcp_t *socket = NULL;
-  socket = malloc(sizeof(*socket));
-  if (socket == NULL) {
-    state_cleanup(state);
-    free(host);
-    napi_throw_error(env, NULL, "Failed to allocate memory to socket");
-    return NULL;
-  }
   int err = 0;
 
-  err = uv_tcp_init(uv_default_loop(), socket);
+  uv_tcp_t *handle;
+
+  handle = malloc(sizeof(*handle));
+  if (handle == NULL) {
+    LOG_ERROR("Error allocating memory to handle");
+    napi_throw_error(env, NULL, "Error allocating memory to tcp handle");
+    state_cleanup(state);
+    return undefined;
+  }
+  err = uv_tcp_init(uv_default_loop(), handle);
   if (err != 0) {
     LOG_ERROR("Error initiating tcp socket");
-    free(socket);
-    state_cleanup(state);
-    free(host);
-    throw_error_uv(env, err);
-    return NULL;
+    goto uv_cleanup;
   }
 
   struct sockaddr_in dest;
-  err = uv_ip4_addr(host, port, &dest);
+  err = uv_ip4_addr(state->host, state->port, &dest);
   if (err != 0) {
     LOG_ERROR("Error with tcp IP address");
-    // cleanup wil free state->req inside state_cleanup
-    free(socket);
-    state_cleanup(state);
-    free(host);
-    throw_error_uv(env, err);
-    return NULL;
+    goto uv_cleanup;
   }
 
-  free(host);
-  uv_connect_t *connect = NULL;
-  connect = malloc(sizeof(*connect));
-  if (connect == NULL) {
-    free(socket);
-    state_cleanup(state);
-    napi_throw_error(env, NULL, "Failed to allocate memory to uv_connect");
-    return NULL;
-  }
-  err = uv_tcp_connect(connect, socket, (void *)&dest, connect_cb);
+  err = uv_tcp_connect(state->req, handle, (void *)&dest, connect_cb);
   if (err != 0) {
     LOG_ERROR("Error connecting to tcp socket");
-    free(socket);
-    state_cleanup(state);
-    throw_error_uv(env, err);
-    return NULL;
+    goto uv_cleanup;
   }
-  state->req = connect;
-  socket->data = state;
+  handle->data = state;
 
-  // function returns undefined on success
-  napi_value undefined;
-  napi_get_undefined(env, &undefined);
+  return undefined;
+
+napi_cleanup:
+  state_cleanup(state);
+  throw_error_napi(env, status);
+  return undefined;
+uv_cleanup:
+  state_cleanup(state);
+  free(handle);
+  throw_error_uv(env, err);
   return undefined;
 }
 

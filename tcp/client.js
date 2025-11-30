@@ -1,5 +1,20 @@
 const tcpConnect = require(".");
 
+function onData2(data) {
+  console.log("Data2: ", data);
+}
+
+function onConnect2() {
+  console.log("Connected! 2");
+}
+
+function onEnd2() {
+  console.log("Disconnected.2 ");
+}
+
+function onError2(err) {
+  console.error("Error2: ", err);
+}
 function onData(data) {
   console.log("Data: ", data);
 }
@@ -17,11 +32,17 @@ function onError(err) {
 }
 
 try {
-  const client = tcpConnect("127.0.0.1", 4242);
-  client.on("connect", onConnect);
-  client.on("data", onData);
-  client.on("end", onEnd);
-  client.on("error", onError);
+  const client1 = tcpConnect("23.192.228.80", 80);
+  // const client1 = tcpConnect("127.0.0.1", 4243);
+  const client2 = tcpConnect("127.0.0.1", 4243);
+  client1.on("connect", onConnect);
+  client1.on("data", onData);
+  client1.on("end", onEnd);
+  client1.on("error", onError);
+  client2.on("connect", onConnect2);
+  client2.on("data", onData2);
+  client2.on("end", onEnd2);
+  client2.on("error", onError2);
 } catch (err) {
   console.error("Error received at JS layer", err);
 }

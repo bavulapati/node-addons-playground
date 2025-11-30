@@ -1,7 +1,6 @@
 const tcp = require("bindings")("tcp");
 const EventEmitter = require("events");
 
-// TODO:: Add tests
 function wrapped(...args) {
   const emitter = new EventEmitter();
 
