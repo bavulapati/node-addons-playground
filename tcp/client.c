@@ -430,8 +430,8 @@ void connect_cb(uv_connect_t *req, int status) {
 
   uv_write_t *write_req = malloc(sizeof(*write_req));
 
-  uv_buf_t buf = uv_buf_init(malloc(state->write_data->len + 1),
-                             state->write_data->len + 1);
+  uv_buf_t buf =
+      uv_buf_init(malloc(state->write_data->len), state->write_data->len);
   memcpy(buf.base, state->write_data->base, state->write_data->len);
   write_req->data = buf.base;
   status = uv_write(write_req, stream, &buf, 1, write_cb);
