@@ -67,7 +67,7 @@ typedef struct {
   uv_buf_t *write_data;
 } addon_state;
 
-addon_state *state_alloc(size_t host_size) {
+addon_state *state_alloc(size_t host_size, size_t write_data_len) {
   addon_state *state;
 
   state = malloc(sizeof(*state));
@@ -89,9 +89,8 @@ addon_state *state_alloc(size_t host_size) {
   if (state->write_data == NULL) {
     return NULL;
   }
-  state->write_data->base = "GET / HTTP/1.1\r\nHost: "
-                            "example.com\r\nConnection: close\r\n\r\n";
-  state->write_data->len = 56;
+  state->write_data->base = malloc(write_data_len);
+  state->write_data->len = write_data_len;
 
   state->env = NULL;
   state->on_connect_ref = NULL;
@@ -111,6 +110,11 @@ void state_cleanup(addon_state *state) {
   if (state->host != NULL) {
     free(state->host);
     state->host = NULL;
+  }
+
+  if (state->write_data != NULL && state->write_data->base != NULL) {
+    free(state->write_data->base);
+    state->write_data->base = NULL;
   }
 
   if (state->write_data != NULL) {
@@ -446,8 +450,8 @@ void connect_cb(uv_connect_t *req, int status) {
 napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
   napi_status status;
 
-  if (argc < 6) {
-    status = napi_throw_error(env, NULL, "Expected 6 args");
+  if (argc < 7) {
+    status = napi_throw_error(env, NULL, "Expected 7 args");
     return napi_invalid_arg;
   }
 
@@ -476,45 +480,56 @@ napi_status validate_cb_input(napi_env env, size_t argc, napi_value *args) {
 
   status = napi_typeof(env, args[2], &valuetype);
   if (status != napi_ok) {
-    LOG_ERROR("Error retrieving the type of third parameter");
+    LOG_ERROR("Error retrieving the type of message");
     throw_error_napi(env, status);
     return napi_generic_failure;
   }
-  if (valuetype != napi_function) {
-    napi_throw_type_error(env, NULL, "Third argument must be function");
-    return napi_function_expected;
+  if (valuetype != napi_string) {
+    napi_throw_type_error(env, NULL, "Third argument must be host string");
+    return napi_string_expected;
   }
 
   status = napi_typeof(env, args[3], &valuetype);
   if (status != napi_ok) {
-    LOG_ERROR("Error retrieving the type of fourth parameter");
+    LOG_ERROR("Error retrieving the type of connect callback");
     throw_error_napi(env, status);
     return napi_generic_failure;
   }
   if (valuetype != napi_function) {
-    napi_throw_type_error(env, NULL, "Fourth argument must be function");
+    napi_throw_type_error(env, NULL, "connect callback must be a function");
     return napi_function_expected;
   }
 
   status = napi_typeof(env, args[4], &valuetype);
   if (status != napi_ok) {
-    LOG_ERROR("Error retrieving the type of fifth parameter");
+    LOG_ERROR("Error retrieving the type of data callback");
     throw_error_napi(env, status);
     return napi_generic_failure;
   }
   if (valuetype != napi_function) {
-    napi_throw_type_error(env, NULL, "Fifth argument must be function");
+    napi_throw_type_error(env, NULL, "data callback must be a function");
     return napi_function_expected;
   }
 
   status = napi_typeof(env, args[5], &valuetype);
   if (status != napi_ok) {
-    LOG_ERROR("Error retrieving the type of sixth parameter");
+    LOG_ERROR("Error retrieving the type of end callback");
     throw_error_napi(env, status);
     return napi_generic_failure;
   }
   if (valuetype != napi_function) {
-    napi_throw_type_error(env, NULL, "Sixth argument must be function");
+    napi_throw_type_error(env, NULL, "end callback must be a function");
+    return napi_function_expected;
+  }
+
+  status = napi_typeof(env, args[6], &valuetype);
+  if (status != napi_ok) {
+    LOG_ERROR("Error retrieving the type of error callback");
+    throw_error_napi(env, status);
+    return napi_generic_failure;
+  }
+  if (valuetype != napi_function) {
+    napi_throw_type_error(env, NULL, "Error callback must be a function");
     return napi_function_expected;
   }
 
@@ -535,11 +550,11 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
-  size_t argc = 6;
+  size_t argc = 7;
   napi_value args[argc];
   status = napi_get_cb_info(env, info, &argc, args, NULL, NULL);
   if (status != napi_ok) {
-    LOG_ERROR("Error retrieving connect function arguments");
+    LOG_ERROR("Error retrieving input arguments");
     goto napi_cleanup;
   }
 
@@ -557,7 +572,14 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     goto napi_cleanup;
   }
 
-  state = state_alloc(host_len + 1);
+  size_t message_len;
+  status = napi_get_value_string_utf8(env, args[2], NULL, 0, &message_len);
+  if (status != napi_ok) {
+    LOG_ERROR("Error reading message length");
+    goto napi_cleanup;
+  }
+
+  state = state_alloc(host_len + 1, message_len + 1);
   if (state == NULL) {
     LOG_ERROR("Error allocating memory for addon state");
     state_cleanup(state);
@@ -566,8 +588,8 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
   }
   state->env = env;
 
-  status = napi_get_value_string_utf8(env, args[0], state->host, host_len + 1,
-                                      &host_len);
+  status =
+      napi_get_value_string_utf8(env, args[0], state->host, host_len + 1, NULL);
   if (status != napi_ok) {
     LOG_ERROR("Error reading host value");
     goto napi_cleanup;
@@ -579,22 +601,29 @@ napi_value ConnectToTcpSocket(napi_env env, napi_callback_info info) {
     goto napi_cleanup;
   }
 
-  status = napi_create_reference(env, args[2], 1, &state->on_connect_ref);
+  status = napi_get_value_string_utf8(env, args[2], state->write_data->base,
+                                      state->write_data->len, NULL);
+  if (status != napi_ok) {
+    LOG_ERROR("Error reading message value");
+    goto napi_cleanup;
+  }
+
+  status = napi_create_reference(env, args[3], 1, &state->on_connect_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_connect reference");
     goto napi_cleanup;
   }
-  status = napi_create_reference(env, args[3], 1, &state->on_data_ref);
+  status = napi_create_reference(env, args[4], 1, &state->on_data_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_data reference");
     goto napi_cleanup;
   }
-  status = napi_create_reference(env, args[4], 1, &state->on_end_ref);
+  status = napi_create_reference(env, args[5], 1, &state->on_end_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_data reference");
     goto napi_cleanup;
   }
-  status = napi_create_reference(env, args[5], 1, &state->on_error_ref);
+  status = napi_create_reference(env, args[6], 1, &state->on_error_ref);
   if (status != napi_ok) {
     LOG_ERROR("Error creating on_error reference");
     goto napi_cleanup;

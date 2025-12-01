@@ -32,9 +32,13 @@ function onError(err) {
 }
 
 try {
-  const client1 = tcpConnect("23.192.228.80", 80);
+  const client1 = tcpConnect(
+    "23.192.228.80",
+    80,
+    "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+  );
   // const client1 = tcpConnect("127.0.0.1", 4243);
-  const client2 = tcpConnect("127.0.0.1", 4243);
+  const client2 = tcpConnect("127.0.0.1", 4243, "Hello\r\n\r\n");
   client1.on("connect", onConnect);
   client1.on("data", onData);
   client1.on("end", onEnd);

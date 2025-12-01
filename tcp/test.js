@@ -1,26 +1,29 @@
-const { solo, test } = require("brittle");
+const { test } = require("brittle");
 const tcpConnect = require(".");
 
 test("validate function signature", (t) => {
   t.is(typeof tcpConnect, "function", "default export should be a function");
   t.exception(() => {
     tcpConnect();
-  }, "expects host and port as input");
+  }, "missing arguments");
   t.exception(() => {
     tcpConnect("12");
-  }, "expects port as input");
+  }, "missing arguments");
   t.exception(() => {
     tcpConnect(4242);
-  }, "expects host and port");
+  }, "missing arguments");
   t.exception(() => {
-    tcpConnect("127.0.0.", 4242);
+    tcpConnect("127.0.0.", 4242, "hello\r\n");
   }, "expects a valid host");
   t.exception.all(() => {
-    tcpConnect(127, "4242");
+    tcpConnect(127, "4242", "hello\r\n");
   }, "expects host as string");
   t.exception.all(() => {
-    tcpConnect("127.0.0.1", "4242");
+    tcpConnect("127.0.0.1", "4242", "hello\r\n");
   }, "expects port as number");
+  t.exception.all(() => {
+    tcpConnect("127.0.0.1", "4242", 619);
+  }, "expects message as string");
 });
 
 test("connection should be refused without server", async (t) => {
@@ -29,7 +32,7 @@ test("connection should be refused without server", async (t) => {
   const lc = t.test("no server");
   lc.plan(2);
 
-  const client = tcpConnect("127.0.0.1", 4242);
+  const client = tcpConnect("127.0.0.1", 4242, "hello\r\n");
   lc.is(typeof client, "object", "client should be object");
   client.once("error", (err) => {
     lc.pass("client emitted error");
@@ -56,6 +59,9 @@ test("should receive data when server is accepting connections", async (t) => {
 
   const net = require("node:net");
   const server = net.createServer((c) => {
+    c.on("data", (data) => {
+      console.log("server received: ", data.toString());
+    });
     c.on("close", () => {
       console.log("server connection closed");
     });
@@ -70,7 +76,7 @@ test("should receive data when server is accepting connections", async (t) => {
 
   await waitForServer(server);
 
-  const client = tcpConnect("127.0.0.1", 4241);
+  const client = tcpConnect("127.0.0.1", 4241, "hello\r\n");
   client.once("connect", () => {
     lc.pass("client connected successfully");
   });
@@ -97,8 +103,11 @@ test("multiple connections", async (t) => {
 
   const net = require("node:net");
   const server = net.createServer((c) => {
+    c.on("data", (data) => {
+      console.log("server received: ", data.toString());
+    });
     c.on("close", () => {
-      console.log("closing server");
+      console.log("server received client connection close event");
     });
     c.end("hello\r\n");
   });
@@ -111,7 +120,7 @@ test("multiple connections", async (t) => {
 
   await waitForServer(server);
 
-  const client = tcpConnect("127.0.0.1", 4243);
+  const client = tcpConnect("127.0.0.1", 4243, "hello\r\n");
   client.once("connect", () => {
     lc.pass("client connected successfully");
   });
@@ -126,7 +135,7 @@ test("multiple connections", async (t) => {
     lc.fail("client received error");
   });
 
-  const client2 = tcpConnect("127.0.0.1", 4243);
+  const client2 = tcpConnect("127.0.0.1", 4243, "hello\r\n");
   client2.once("connect", () => {
     lc.pass("client connected successfully");
   });
@@ -146,12 +155,16 @@ test("multiple connections", async (t) => {
 });
 
 test("Remote Server", async (t) => {
-  t.plan(3);
+  t.plan(2);
 
   const lc = t.test("Remote server");
-  lc.plan(6);
+  lc.plan(3);
 
-  const client = tcpConnect("23.192.228.80", 80);
+  const client = tcpConnect(
+    "23.192.228.80",
+    80,
+    "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+  );
   client.once("connect", () => {
     lc.pass("client connected successfully");
   });
@@ -166,19 +179,38 @@ test("Remote Server", async (t) => {
     lc.fail("client received error");
   });
 
-  const client2 = tcpConnect("23.192.228.80", 80);
-  client2.once("connect", () => {
+  await lc;
+});
+
+test("Mixed connections", async (t) => {
+  t.plan(3);
+
+  const lc = t.test("Remote server");
+  lc.plan(4);
+
+  const client = tcpConnect(
+    "23.192.228.80",
+    80,
+    "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+  );
+  client.once("connect", () => {
     lc.pass("client connected successfully");
   });
-  client2.once("end", () => {
+  client.once("end", () => {
     lc.pass("client connection ended successfully");
     t.pass();
   });
-  client2.on("data", () => {
+  client.on("data", () => {
     lc.pass("client received data successfully");
   });
-  client2.on("error", () => {
+  client.on("error", () => {
     lc.fail("client received error");
+  });
+
+  const client2 = tcpConnect("127.0.0.1", 4242, "hello\r\n");
+  client2.on("error", (err) => {
+    lc.pass("client received error");
+    t.pass();
   });
 
   await lc;
