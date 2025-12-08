@@ -4,14 +4,19 @@ project(tcp)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(NAPI_VERSION=4)
 # set(CMAKE_BUILD_TYPE "Debug")
-# add_compile_definitions(MEMORY_DEBUG)
 
 file(GLOB SOURCE_FILES "client.c")
 
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${CMAKE_JS_SRC})
+
 set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
 # Define DEBUG macro only for debug builds
-target_compile_definitions(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:DEBUG>)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  # target_compile_options(${PROJECT_NAME} PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+  # target_link_options(${PROJECT_NAME} PUBLIC -fsanitize=address)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC DEBUG)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC MEMORY_DEBUG)
+endif()
 
 set(CMAKE_JS_NODE_INC ~/.cmake-js/node-arm64/v24.11.0/include/node/)
 
@@ -26,3 +31,4 @@ if(MSVC AND CMAKE_JS_NODELIB_DEF AND CMAKE_JS_NODELIB_TARGET)
 endif()
 
 message(STATUS  "CMAKE_JS_INC ${CMAKE_JS_INC}")
+

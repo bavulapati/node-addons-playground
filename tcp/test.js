@@ -13,13 +13,13 @@ test("validate function signature", (t) => {
     tcpConnect(4242);
   }, "missing arguments");
   t.exception(() => {
-    tcpConnect("127.0.0.", 4242, "hello\r\n");
+    tcpConnect("127.0.0.", 4242, "hello\r\n\r\n");
   }, "expects a valid host");
   t.exception.all(() => {
-    tcpConnect(127, "4242", "hello\r\n");
+    tcpConnect(127, "4242", "hello\r\n\r\n");
   }, "expects host as string");
   t.exception.all(() => {
-    tcpConnect("127.0.0.1", "4242", "hello\r\n");
+    tcpConnect("127.0.0.1", "4242", "hello\r\n\r\n");
   }, "expects port as number");
   t.exception.all(() => {
     tcpConnect("127.0.0.1", "4242", 619);
@@ -32,7 +32,7 @@ test("connection should be refused without server", async (t) => {
   const lc = t.test("no server");
   lc.plan(2);
 
-  const client = tcpConnect("127.0.0.1", 4242, "hello\r\n");
+  const client = tcpConnect("127.0.0.1", 4242, "hello\r\n\r\n");
   lc.is(typeof client, "object", "client should be object");
   client.once("error", (err) => {
     lc.pass("client emitted error");
@@ -64,6 +64,7 @@ test("should receive data when server is accepting connections", async (t) => {
     });
     c.on("close", () => {
       console.log("server connection closed");
+      t.pass();
     });
     c.end("hello\r\n");
   });
@@ -76,13 +77,12 @@ test("should receive data when server is accepting connections", async (t) => {
 
   await waitForServer(server);
 
-  const client = tcpConnect("127.0.0.1", 4241, "hello\r\n");
+  const client = tcpConnect("127.0.0.1", 4241, "hello\r\n\r\n");
   client.once("connect", () => {
     lc.pass("client connected successfully");
   });
   client.once("end", () => {
     lc.pass("client connection ended successfully");
-    t.pass();
   });
   client.on("data", () => {
     lc.pass("client received data successfully");
@@ -108,6 +108,7 @@ test("multiple connections", async (t) => {
     });
     c.on("close", () => {
       console.log("server received client connection close event");
+      t.pass();
     });
     c.end("hello\r\n");
   });
@@ -120,13 +121,12 @@ test("multiple connections", async (t) => {
 
   await waitForServer(server);
 
-  const client = tcpConnect("127.0.0.1", 4243, "hello\r\n");
+  const client = tcpConnect("127.0.0.1", 4243, "hello\r\n\r\n");
   client.once("connect", () => {
     lc.pass("client connected successfully");
   });
   client.once("end", () => {
     lc.pass("client connection ended successfully");
-    t.pass();
   });
   client.on("data", () => {
     lc.pass("client received data successfully");
@@ -135,13 +135,12 @@ test("multiple connections", async (t) => {
     lc.fail("client received error");
   });
 
-  const client2 = tcpConnect("127.0.0.1", 4243, "hello\r\n");
+  const client2 = tcpConnect("127.0.0.1", 4243, "hello\r\n\r\n");
   client2.once("connect", () => {
     lc.pass("client connected successfully");
   });
   client2.once("end", () => {
     lc.pass("client connection ended successfully");
-    t.pass();
   });
   client2.on("data", () => {
     lc.pass("client received data successfully");
@@ -183,10 +182,10 @@ test("Remote Server", async (t) => {
 });
 
 test("Mixed connections", async (t) => {
-  t.plan(3);
+  t.plan(4);
 
   const lc = t.test("Remote server");
-  lc.plan(4);
+  lc.plan(7);
 
   const client = tcpConnect(
     "23.192.228.80",
@@ -207,10 +206,28 @@ test("Mixed connections", async (t) => {
     lc.fail("client received error");
   });
 
-  const client2 = tcpConnect("127.0.0.1", 4242, "hello\r\n");
+  const client2 = tcpConnect("127.0.0.1", 4242, "hello\r\n\r\n");
   client2.on("error", (err) => {
     lc.pass("client received error");
     t.pass();
+  });
+  const client3 = tcpConnect(
+    "142.251.43.78",
+    80,
+    "GET / HTTP/1.1\r\nHost: google.com\r\nConnection: close\r\n\r\n",
+  );
+  client3.once("connect", () => {
+    lc.pass("client connected successfully");
+  });
+  client3.once("end", () => {
+    lc.pass("client connection ended successfully");
+    t.pass();
+  });
+  client3.on("data", () => {
+    lc.pass("client received data successfully");
+  });
+  client3.on("error", () => {
+    lc.fail("client received error");
   });
 
   await lc;
